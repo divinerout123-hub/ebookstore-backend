@@ -1,0 +1,1456 @@
+openapi: 3.0.3
+info:
+  title: E-Commerce Bookstore API
+  version: 1.0.0
+  description: |
+    REST API for the E-Commerce Bookstore backend.
+
+    **Database:** PostgreSQL. All resource identifiers are `BIGSERIAL` / `BIGINT`
+    primary keys (exposed as `int64`), monetary values are `NUMERIC(10,2)`
+    (exposed as `number`/`double` with two decimals) and timestamps are
+    `TIMESTAMPTZ` (exposed as RFC 3339 `date-time`).
+
+    **Authentication:** All endpoints except `POST /api/auth/register`,
+    `POST /api/auth/login`, and the read-only product/category endpoints require
+    a JWT bearer token obtained from `POST /api/auth/login`.
+  contact:
+    name: Bookstore API Support
+    email: support@bookstore.example.com
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://api.bookstore.example.com
+    description: Production
+tags:
+  - name: Auth
+    description: Registration and login
+  - name: Users
+    description: User profiles
+  - name: Products
+    description: Book catalogue, search and recommendations
+  - name: Categories
+    description: Book categories
+  - name: Cart
+    description: Shopping cart
+  - name: Orders
+    description: Order management
+  - name: Payments
+    description: Payment processing
+  - name: Addresses
+    description: User shipping/billing addresses
+
+paths:
+  # ------------------------------------------------------------------ AUTH
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      operationId: registerUser
+      summary: Register new user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              firstName: Jane
+              lastName: Doe
+              email: jane.doe@example.com
+              password: "<your-password>"
+              phone: "+14155550123"
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      operationId: loginUser
+      summary: Login user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: jane.doe@example.com
+              password: "<your-password>"
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ----------------------------------------------------------------- USERS
+  /api/users/{userId}:
+    get:
+      tags: [Users]
+      operationId: getUserProfile
+      summary: Get user profile
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # -------------------------------------------------------------- PRODUCTS
+  /api/products:
+    get:
+      tags: [Products]
+      operationId: getAllProducts
+      summary: Get all products
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: sort
+          in: query
+          description: Sort expression in the form `field,(asc|desc)`
+          schema:
+            type: string
+            default: title,asc
+            example: price,desc
+      responses:
+        '200':
+          description: Paginated list of products
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/products/search:
+    get:
+      tags: [Products]
+      operationId: searchProducts
+      summary: Search products
+      description: Case-insensitive search across title, author, ISBN and description.
+      security: []
+      parameters:
+        - name: keyword
+          in: query
+          required: true
+          description: Search term
+          schema:
+            type: string
+            minLength: 1
+            example: tolkien
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Paginated search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/products/category/{categoryId}:
+    get:
+      tags: [Products]
+      operationId: getProductsByCategory
+      summary: Get products by category
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Paginated list of products in the category
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/products/recommended/{userId}:
+    get:
+      tags: [Products]
+      operationId: getRecommendedProducts
+      summary: Get recommended products for a user
+      description: Recommendations based on the user's order history and browsing categories.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - name: limit
+          in: query
+          description: Maximum number of recommendations
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        '200':
+          description: List of recommended products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Product'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/products/{productId}:
+    get:
+      tags: [Products]
+      operationId: getProductById
+      summary: Get product by ID
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      responses:
+        '200':
+          description: Product details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ------------------------------------------------------------ CATEGORIES
+  /api/categories:
+    get:
+      tags: [Categories]
+      operationId: getAllCategories
+      summary: Get all categories
+      security: []
+      responses:
+        '200':
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Category'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/categories/{categoryId}:
+    get:
+      tags: [Categories]
+      operationId: getCategoryById
+      summary: Get category by ID
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '200':
+          description: Category details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ------------------------------------------------------------------ CART
+  /api/cart/{userId}:
+    get:
+      tags: [Cart]
+      operationId: getUserCart
+      summary: Get user cart
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: The user's cart
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cart'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/cart/{userId}/items:
+    post:
+      tags: [Cart]
+      operationId: addCartItem
+      summary: Add item to cart
+      description: Adds a product to the cart. If the product is already in the cart, its quantity is increased.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddCartItemRequest'
+            example:
+              productId: 42
+              quantity: 2
+      responses:
+        '201':
+          description: Item added; returns the updated cart
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cart'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Requested quantity exceeds available stock
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/cart/{userId}/items/{itemId}:
+    put:
+      tags: [Cart]
+      operationId: updateCartItem
+      summary: Update cart item
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/ItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCartItemRequest'
+            example:
+              quantity: 3
+      responses:
+        '200':
+          description: Item updated; returns the updated cart
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cart'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Requested quantity exceeds available stock
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags: [Cart]
+      operationId: removeCartItem
+      summary: Remove item from cart
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/ItemId'
+      responses:
+        '200':
+          description: Item removed; returns the updated cart
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cart'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ---------------------------------------------------------------- ORDERS
+  /api/orders:
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      summary: Create order
+      description: Creates an order from the user's current cart and clears the cart.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+            example:
+              userId: 1
+              shippingAddressId: 5
+              billingAddressId: 5
+              notes: Leave at the front desk
+      responses:
+        '201':
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          description: Invalid request or cart is empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Insufficient stock for one or more items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/orders/user/{userId}:
+    get:
+      tags: [Orders]
+      operationId: getUserOrderHistory
+      summary: Get user order history
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: status
+          in: query
+          description: Filter by order status
+          schema:
+            $ref: '#/components/schemas/OrderStatus'
+      responses:
+        '200':
+          description: Paginated order history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/orders/{orderId}:
+    get:
+      tags: [Orders]
+      operationId: getOrderById
+      summary: Get order by ID
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/orders/{orderId}/cancel:
+    put:
+      tags: [Orders]
+      operationId: cancelOrder
+      summary: Cancel order
+      description: Cancels an order. Only orders in `PENDING`, `PAID` or `PROCESSING` status can be cancelled.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelOrderRequest'
+            example:
+              reason: Ordered by mistake
+      responses:
+        '200':
+          description: Order cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Order can no longer be cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # -------------------------------------------------------------- PAYMENTS
+  /api/payments:
+    post:
+      tags: [Payments]
+      operationId: processPayment
+      summary: Process payment
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Unique key to safely retry a payment request without double charging
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+            example:
+              orderId: 101
+              method: CREDIT_CARD
+              amount: 45.97
+              currency: USD
+              card:
+                cardHolderName: Jane Doe
+                cardNumber: "4111111111111111"
+                expiryMonth: 12
+                expiryYear: 2030
+                cvv: "123"
+      responses:
+        '201':
+          description: Payment processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: Payment declined
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Order has already been paid or is not payable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/payments/{paymentId}:
+    get:
+      tags: [Payments]
+      operationId: getPaymentStatus
+      summary: Get payment status
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          description: Payment ID
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+            example: 9001
+      responses:
+        '200':
+          description: Payment details and status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ------------------------------------------------------------- ADDRESSES
+  /api/addresses:
+    post:
+      tags: [Addresses]
+      operationId: addAddress
+      summary: Add address
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+            example:
+              userId: 1
+              type: SHIPPING
+              fullName: Jane Doe
+              phone: "+14155550123"
+              line1: 221B Baker Street
+              line2: Apt 4
+              city: San Francisco
+              state: CA
+              postalCode: "94105"
+              country: US
+              isDefault: true
+      responses:
+        '201':
+          description: Address created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Address'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/addresses/user/{userId}:
+    get:
+      tags: [Addresses]
+      operationId: getUserAddresses
+      summary: Get user addresses
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: List of the user's addresses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Address'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: User ID
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 1
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      description: Product ID
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 42
+    CategoryId:
+      name: categoryId
+      in: path
+      required: true
+      description: Category ID
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 3
+    ItemId:
+      name: itemId
+      in: path
+      required: true
+      description: Cart item ID
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 17
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      description: Order ID
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 101
+    Page:
+      name: page
+      in: query
+      description: Zero-based page index
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Size:
+      name: size
+      in: query
+      description: Page size
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  responses:
+    BadRequest:
+      description: Validation error or malformed request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            timestamp: "2025-01-15T10:30:00Z"
+            status: 400
+            error: Bad Request
+            message: Validation failed
+            path: /api/auth/register
+            details:
+              - field: email
+                message: must be a well-formed email address
+    Unauthorized:
+      description: Missing, invalid or expired authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Authenticated user is not allowed to access this resource
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    # ---------------------------------------------------------------- common
+    Error:
+      type: object
+      required: [timestamp, status, error, message]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+          example: 404
+        error:
+          type: string
+          example: Not Found
+        message:
+          type: string
+          example: Product with id 42 not found
+        path:
+          type: string
+          example: /api/products/42
+        details:
+          type: array
+          description: Field-level validation errors
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    PageMetadata:
+      type: object
+      required: [page, size, totalElements, totalPages]
+      properties:
+        page:
+          type: integer
+          example: 0
+        size:
+          type: integer
+          example: 20
+        totalElements:
+          type: integer
+          format: int64
+          example: 134
+        totalPages:
+          type: integer
+          example: 7
+
+    # ------------------------------------------------------------------ user
+    RegisterRequest:
+      type: object
+      required: [firstName, lastName, email, password]
+      properties:
+        firstName:
+          type: string
+          maxLength: 100
+          example: Jane
+        lastName:
+          type: string
+          maxLength: 100
+          example: Doe
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          example: jane.doe@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          writeOnly: true
+        phone:
+          type: string
+          pattern: '^\+?[0-9]{7,15}$'
+          example: "+14155550123"
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: jane.doe@example.com
+        password:
+          type: string
+          format: password
+          writeOnly: true
+
+    AuthResponse:
+      type: object
+      required: [accessToken, tokenType, expiresIn, user]
+      properties:
+        accessToken:
+          type: string
+          description: JWT access token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: integer
+          description: Token lifetime in seconds
+          example: 3600
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      required: [id, firstName, lastName, email, role, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 1
+        firstName:
+          type: string
+          example: Jane
+        lastName:
+          type: string
+          example: Doe
+        email:
+          type: string
+          format: email
+          example: jane.doe@example.com
+        phone:
+          type: string
+          nullable: true
+          example: "+14155550123"
+        role:
+          type: string
+          enum: [CUSTOMER, ADMIN]
+          example: CUSTOMER
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # -------------------------------------------------------------- category
+    Category:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 3
+        name:
+          type: string
+          example: Science Fiction
+        description:
+          type: string
+          nullable: true
+          example: Novels and stories set in imagined futures
+        parentCategoryId:
+          type: integer
+          format: int64
+          nullable: true
+          description: Parent category for hierarchical categories
+        createdAt:
+          type: string
+          format: date-time
+
+    # --------------------------------------------------------------- product
+    Product:
+      type: object
+      required: [id, isbn, title, author, price, stockQuantity, categoryId]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 42
+        isbn:
+          type: string
+          example: "9780261102354"
+        title:
+          type: string
+          example: The Fellowship of the Ring
+        author:
+          type: string
+          example: J.R.R. Tolkien
+        publisher:
+          type: string
+          nullable: true
+          example: HarperCollins
+        description:
+          type: string
+          nullable: true
+        price:
+          type: number
+          format: double
+          minimum: 0
+          example: 15.99
+        stockQuantity:
+          type: integer
+          minimum: 0
+          example: 120
+        categoryId:
+          type: integer
+          format: int64
+          example: 3
+        category:
+          $ref: '#/components/schemas/Category'
+        language:
+          type: string
+          example: English
+        pages:
+          type: integer
+          nullable: true
+          example: 432
+        publishedDate:
+          type: string
+          format: date
+          nullable: true
+        coverImageUrl:
+          type: string
+          format: uri
+          nullable: true
+        rating:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 5
+          nullable: true
+          example: 4.7
+        createdAt:
+          type: string
+          format: date-time
+
+    ProductPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMetadata'
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/Product'
+
+    # ------------------------------------------------------------------ cart
+    AddCartItemRequest:
+      type: object
+      required: [productId, quantity]
+      properties:
+        productId:
+          type: integer
+          format: int64
+          example: 42
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 99
+          example: 2
+
+    UpdateCartItemRequest:
+      type: object
+      required: [quantity]
+      properties:
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 99
+          example: 3
+
+    CartItem:
+      type: object
+      required: [id, productId, quantity, unitPrice, subtotal]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 17
+        productId:
+          type: integer
+          format: int64
+          example: 42
+        productTitle:
+          type: string
+          example: The Fellowship of the Ring
+        coverImageUrl:
+          type: string
+          format: uri
+          nullable: true
+        quantity:
+          type: integer
+          example: 2
+        unitPrice:
+          type: number
+          format: double
+          example: 15.99
+        subtotal:
+          type: number
+          format: double
+          example: 31.98
+
+    Cart:
+      type: object
+      required: [id, userId, items, totalItems, totalAmount]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 8
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartItem'
+        totalItems:
+          type: integer
+          example: 2
+        totalAmount:
+          type: number
+          format: double
+          example: 31.98
+        updatedAt:
+          type: string
+          format: date-time
+
+    # --------------------------------------------------------------- address
+    AddressType:
+      type: string
+      enum: [SHIPPING, BILLING]
+
+    AddressRequest:
+      type: object
+      required: [userId, type, fullName, line1, city, state, postalCode, country]
+      properties:
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        type:
+          $ref: '#/components/schemas/AddressType'
+        fullName:
+          type: string
+          example: Jane Doe
+        phone:
+          type: string
+          example: "+14155550123"
+        line1:
+          type: string
+          example: 221B Baker Street
+        line2:
+          type: string
+          nullable: true
+          example: Apt 4
+        city:
+          type: string
+          example: San Francisco
+        state:
+          type: string
+          example: CA
+        postalCode:
+          type: string
+          example: "94105"
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code
+          minLength: 2
+          maxLength: 2
+          example: US
+        isDefault:
+          type: boolean
+          default: false
+
+    Address:
+      allOf:
+        - $ref: '#/components/schemas/AddressRequest'
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: integer
+              format: int64
+              readOnly: true
+              example: 5
+            createdAt:
+              type: string
+              format: date-time
+
+    # ----------------------------------------------------------------- order
+    OrderStatus:
+      type: string
+      enum: [PENDING, PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED, REFUNDED]
+
+    CreateOrderRequest:
+      type: object
+      required: [userId, shippingAddressId]
+      properties:
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        shippingAddressId:
+          type: integer
+          format: int64
+          example: 5
+        billingAddressId:
+          type: integer
+          format: int64
+          description: Defaults to the shipping address when omitted
+          example: 5
+        notes:
+          type: string
+          maxLength: 500
+          nullable: true
+
+    CancelOrderRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+          example: Ordered by mistake
+
+    OrderItem:
+      type: object
+      required: [id, productId, productTitle, quantity, unitPrice, subtotal]
+      properties:
+        id:
+          type: integer
+          format: int64
+        productId:
+          type: integer
+          format: int64
+        productTitle:
+          type: string
+        quantity:
+          type: integer
+        unitPrice:
+          type: number
+          format: double
+        subtotal:
+          type: number
+          format: double
+
+    Order:
+      type: object
+      required: [id, userId, status, items, subtotal, shippingCost, tax, totalAmount, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 101
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        shippingAddress:
+          $ref: '#/components/schemas/Address'
+        billingAddress:
+          $ref: '#/components/schemas/Address'
+        subtotal:
+          type: number
+          format: double
+          example: 31.98
+        shippingCost:
+          type: number
+          format: double
+          example: 5.99
+        tax:
+          type: number
+          format: double
+          example: 8.00
+        totalAmount:
+          type: number
+          format: double
+          example: 45.97
+        notes:
+          type: string
+          nullable: true
+        cancellationReason:
+          type: string
+          nullable: true
+        paymentId:
+          type: integer
+          format: int64
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    OrderPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMetadata'
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/Order'
+
+    # --------------------------------------------------------------- payment
+    PaymentMethod:
+      type: string
+      enum: [CREDIT_CARD, DEBIT_CARD, PAYPAL, UPI, NET_BANKING, CASH_ON_DELIVERY]
+
+    PaymentStatus:
+      type: string
+      enum: [PENDING, SUCCESS, FAILED, REFUNDED]
+
+    CardDetails:
+      type: object
+      description: Required when `method` is `CREDIT_CARD` or `DEBIT_CARD`. Never stored or returned.
+      required: [cardHolderName, cardNumber, expiryMonth, expiryYear, cvv]
+      properties:
+        cardHolderName:
+          type: string
+          example: Jane Doe
+        cardNumber:
+          type: string
+          pattern: '^[0-9]{13,19}$'
+          writeOnly: true
+          example: "4111111111111111"
+        expiryMonth:
+          type: integer
+          minimum: 1
+          maximum: 12
+          example: 12
+        expiryYear:
+          type: integer
+          minimum: 2024
+          example: 2030
+        cvv:
+          type: string
+          pattern: '^[0-9]{3,4}$'
+          writeOnly: true
+          example: "123"
+
+    PaymentRequest:
+      type: object
+      required: [orderId, method, amount, currency]
+      properties:
+        orderId:
+          type: integer
+          format: int64
+          example: 101
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+          example: 45.97
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          minLength: 3
+          maxLength: 3
+          example: USD
+        card:
+          $ref: '#/components/schemas/CardDetails'
+
+    Payment:
+      type: object
+      required: [id, orderId, method, amount, currency, status, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 9001
+        orderId:
+          type: integer
+          format: int64
+          example: 101
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        amount:
+          type: number
+          format: double
+          example: 45.97
+        currency:
+          type: string
+          example: USD
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        transactionId:
+          type: string
+          nullable: true
+          description: Reference returned by the payment gateway
+          example: txn_1Nq3Xk2eZvKYlo2C
+        failureReason:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
